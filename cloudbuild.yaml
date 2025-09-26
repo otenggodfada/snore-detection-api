@@ -1,11 +1,11 @@
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/snoreff', '.']
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/snore-api/snoreff', '.']
   
-  # Push the container image to Container Registry
+  # Push the container image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/snoreff']
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/snore-api/snoreff']
   
   # Deploy container image to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -15,14 +15,17 @@ steps:
     - 'deploy'
     - 'snoreff'
     - '--image'
-    - 'gcr.io/$PROJECT_ID/snoreff'
+    - '${_REGION}-docker.pkg.dev/$PROJECT_ID/snore-api/snoreff'
     - '--region'
-    - 'us-central1'
+    - '${_REGION}'
     - '--platform'
     - 'managed'
     - '--allow-unauthenticated'
     - '--port'
     - '8080'
 
+substitutions:
+  _REGION: 'us-central1'
+
 images:
-  - 'gcr.io/$PROJECT_ID/snoreff'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/snore-api/snoreff'
