@@ -16,6 +16,79 @@ def extract_features(audio, sr):
     mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=20)
     return np.mean(mfcc, axis=1).reshape(1, -1)
 
+# --- Remove silent portions from audio ---
+def remove_silence(audio, sr, silence_threshold=0.01, min_silence_duration=0.5):
+    """
+    Remove silent portions from the beginning and end of audio.
+    
+    Args:
+        audio: Audio signal as numpy array
+        sr: Sample rate
+        silence_threshold: RMS threshold below which audio is considered silent (default: 0.01)
+        min_silence_duration: Minimum duration of silence to be removed in seconds (default: 0.5)
+    
+    Returns:
+        Trimmed audio signal
+    """
+    # Calculate RMS energy in small windows
+    frame_length = int(0.1 * sr)  # 100ms windows
+    hop_length = frame_length // 2
+    
+    # Calculate RMS for each frame
+    rms = librosa.feature.rms(y=audio, frame_length=frame_length, hop_length=hop_length)[0]
+    
+    # Find frames below silence threshold
+    silent_frames = rms < silence_threshold
+    
+    # Convert frame indices to sample indices
+    silent_samples = np.zeros(len(audio), dtype=bool)
+    for i, is_silent in enumerate(silent_frames):
+        start_sample = i * hop_length
+        end_sample = min(start_sample + frame_length, len(audio))
+        silent_samples[start_sample:end_sample] = is_silent
+    
+    # Find continuous silent regions
+    silent_regions = []
+    in_silence = False
+    silence_start = 0
+    
+    for i, is_silent in enumerate(silent_samples):
+        if is_silent and not in_silence:
+            # Start of silence
+            silence_start = i
+            in_silence = True
+        elif not is_silent and in_silence:
+            # End of silence
+            silence_duration = (i - silence_start) / sr
+            if silence_duration >= min_silence_duration:
+                silent_regions.append((silence_start, i))
+            in_silence = False
+    
+    # Handle case where audio ends with silence
+    if in_silence:
+        silence_duration = (len(silent_samples) - silence_start) / sr
+        if silence_duration >= min_silence_duration:
+            silent_regions.append((silence_start, len(silent_samples)))
+    
+    # Remove silent regions from beginning and end
+    if not silent_regions:
+        return audio
+    
+    # Find the first non-silent region
+    first_silent_end = silent_regions[0][1] if silent_regions[0][0] == 0 else 0
+    
+    # Find the last non-silent region
+    last_silent_start = silent_regions[-1][0] if silent_regions[-1][1] == len(audio) else len(audio)
+    
+    # Extract the non-silent portion
+    trimmed_audio = audio[first_silent_end:last_silent_start]
+    
+    # Ensure we don't return empty audio
+    if len(trimmed_audio) == 0:
+        return audio
+    
+    return trimmed_audio
+
 # --- Generate synthetic snore ---
 def generate_snore(duration, sample_rate, pitch_contour, mfcc_template):
     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
@@ -60,7 +133,15 @@ async def analyze_snore(file: UploadFile = File(...)):
 
         # Load real snore
         y, sr = librosa.load(file_path, sr=22050)
+        original_duration = librosa.get_duration(y=y, sr=sr)
+        
+        # Remove silent portions from beginning and end
+        y_trimmed = remove_silence(y, sr, silence_threshold=0.01, min_silence_duration=0.5)
+        
+        # Use trimmed audio for analysis
+        y = y_trimmed
         duration = librosa.get_duration(y=y, sr=sr)
+        trimmed_duration = original_duration - duration
 
         # Extract pitch & MFCCs
         f0, _, _ = librosa.pyin(
@@ -79,6 +160,47 @@ async def analyze_snore(file: UploadFile = File(...)):
         feat_real = extract_features(y, sr)
         feat_synth = extract_features(synthetic, sr)
         cos_sim = float(cosine_similarity(feat_real, feat_synth)[0][0])
+        
+        # Additional validation: Check if audio has snore-like characteristics
+        # Calculate spectral centroid (brightness) - snores typically have lower values
+        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
+        
+        # Calculate zero crossing rate - snores have moderate values
+        zcr = np.mean(librosa.feature.zero_crossing_rate(y))
+        
+        # Calculate spectral rolloff - snores have lower rolloff frequencies
+        spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
+        
+        # Adjust similarity based on snore characteristics
+        snore_likelihood = 1.0
+        
+        # Penalize if spectral centroid is too high (not snore-like)
+        if spectral_centroid > 2000:  # Hz
+            snore_likelihood *= 0.7
+            
+        # Penalize if zero crossing rate is too high (too much noise)
+        if zcr > 0.1:
+            snore_likelihood *= 0.8
+            
+        # Penalize if spectral rolloff is too high (too much high frequency content)
+        if spectral_rolloff > 4000:  # Hz
+            snore_likelihood *= 0.6
+            
+        # Apply snore likelihood adjustment to cosine similarity
+        adjusted_cos_sim = cos_sim * snore_likelihood
+        
+        # Determine if audio is likely a snore based on similarity and characteristics
+        is_likely_snore = (
+            adjusted_cos_sim > 0.3 and  # Minimum similarity threshold
+            spectral_centroid < 3000 and  # Not too bright
+            zcr < 0.15 and  # Not too noisy
+            spectral_rolloff < 5000  # Not too much high frequency content
+        )
+        
+        # Apply additional processing based on snore likelihood
+        if not is_likely_snore:
+            # For non-snore audio, apply more aggressive similarity reduction
+            adjusted_cos_sim *= 0.5  # Further reduce similarity for non-snore audio
 
         # DTW distance
         mfcc_real = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
@@ -87,9 +209,14 @@ async def analyze_snore(file: UploadFile = File(...)):
         dtw_distance = float(D[-1, -1])
 
         return {
-            "cosine_similarity": cos_sim,
-            "dtw_distance": dtw_distance,
-            "download_url": f"/download/{os.path.basename(synth_file)}"
+            "cosine_similarity": round(adjusted_cos_sim, 4),
+            "dtw_distance": round(dtw_distance, 4),
+            "download_url": f"/download/{os.path.basename(synth_file)}",
+            "audio_info": {
+                "original_duration": round(original_duration, 2),
+                "trimmed_duration": round(duration, 2),
+                "silence_removed": round(trimmed_duration, 2)
+            }
         }
 
     except Exception as e:
