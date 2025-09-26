@@ -11,6 +11,59 @@ import uuid
 
 app = FastAPI(title="Snore Detection API", description="Analyze and compare real vs synthetic snores")
 
+# --- Music detection ---
+def is_music(audio, sr):
+    """
+    Detect if audio is music based on various audio features.
+    Returns True if music is detected, False otherwise.
+    """
+    try:
+        # Extract tempo (music typically has consistent tempo)
+        tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+        
+        # Extract spectral centroid (music has more varied spectral content)
+        spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sr)[0]
+        spectral_centroid_std = np.std(spectral_centroids)
+        
+        # Extract zero crossing rate (music has more complex patterns)
+        zcr = librosa.feature.zero_crossing_rate(audio)[0]
+        zcr_std = np.std(zcr)
+        
+        # Extract chroma features (music has harmonic structure)
+        chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
+        chroma_std = np.std(chroma)
+        
+        # Extract rhythm regularity (music has more regular rhythm)
+        onset_frames = librosa.onset.onset_detect(y=audio, sr=sr)
+        if len(onset_frames) > 1:
+            onset_intervals = np.diff(onset_frames)
+            rhythm_regularity = 1.0 / (1.0 + np.std(onset_intervals) / np.mean(onset_intervals))
+        else:
+            rhythm_regularity = 0
+        
+        # Music detection criteria
+        is_tempo_consistent = 60 <= tempo <= 200  # Typical music tempo range
+        has_varied_spectrum = spectral_centroid_std > 200  # Music has more spectral variation
+        has_complex_patterns = zcr_std > 0.01  # Music has more complex zero-crossing patterns
+        has_harmonic_structure = chroma_std > 0.1  # Music has harmonic content
+        has_regular_rhythm = rhythm_regularity > 0.3  # Music has more regular rhythm
+        
+        # Count how many music characteristics are present
+        music_indicators = sum([
+            is_tempo_consistent,
+            has_varied_spectrum,
+            has_complex_patterns,
+            has_harmonic_structure,
+            has_regular_rhythm
+        ])
+        
+        # If 3 or more indicators suggest music, classify as music
+        return music_indicators >= 3
+        
+    except Exception as e:
+        # If analysis fails, assume it's not music (safer for snore detection)
+        return False
+
 # --- Feature extractor ---
 def extract_features(audio, sr):
     mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=20)
@@ -60,7 +113,25 @@ async def analyze_snore(file: UploadFile = File(...)):
 
         # Load real snore
         y, sr = librosa.load(file_path, sr=22050)
+        
+        # Amplify the audio to make it louder (increase volume by 3dB)
+        amplification_factor = 2.0  # 2x amplification = ~6dB increase
+        y = y * amplification_factor
+        
+        # Normalize to prevent clipping while maintaining the increased volume
+        y = librosa.util.normalize(y, norm=np.inf)
+        
         duration = librosa.get_duration(y=y, sr=sr)
+        
+        # Check if the audio is music - if so, don't detect as snore
+        if is_music(y, sr):
+            return {
+                "is_music": True,
+                "message": "Music detected - snore analysis skipped",
+                "cosine_similarity": None,
+                "dtw_distance": None,
+                "download_url": None
+            }
 
         # Extract pitch & MFCCs
         f0, _, _ = librosa.pyin(
@@ -87,6 +158,8 @@ async def analyze_snore(file: UploadFile = File(...)):
         dtw_distance = float(D[-1, -1])
 
         return {
+            "is_music": False,
+            "message": "Snore analysis completed",
             "cosine_similarity": cos_sim,
             "dtw_distance": dtw_distance,
             "download_url": f"/download/{os.path.basename(synth_file)}"
