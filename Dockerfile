@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY server.py .
+COPY app.py .
 
 # Create tmp directory for file uploads
 RUN mkdir -p /tmp
@@ -26,4 +26,4 @@ ENV PORT=8080
 ENV HOST=0.0.0.0
 
 # Run the application
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
