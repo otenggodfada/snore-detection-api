@@ -41,12 +41,22 @@ def is_music(audio, sr):
         else:
             rhythm_regularity = 0
         
-        # Music detection criteria
-        is_tempo_consistent = 60 <= tempo <= 200  # Typical music tempo range
-        has_varied_spectrum = spectral_centroid_std > 200  # Music has more spectral variation
-        has_complex_patterns = zcr_std > 0.01  # Music has more complex zero-crossing patterns
-        has_harmonic_structure = chroma_std > 0.1  # Music has harmonic content
-        has_regular_rhythm = rhythm_regularity > 0.3  # Music has more regular rhythm
+        # Extract RMS energy (music typically has more consistent energy levels)
+        rms = librosa.feature.rms(y=audio)[0]
+        rms_std = np.std(rms)
+        
+        # Extract spectral rolloff (music has more defined frequency content)
+        rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr)[0]
+        rolloff_std = np.std(rolloff)
+        
+        # More strict music detection criteria
+        is_tempo_consistent = 80 <= tempo <= 180  # Narrower tempo range for music
+        has_varied_spectrum = spectral_centroid_std > 500  # Higher threshold for spectral variation
+        has_complex_patterns = zcr_std > 0.02  # Higher threshold for zero-crossing complexity
+        has_harmonic_structure = chroma_std > 0.2  # Higher threshold for harmonic content
+        has_regular_rhythm = rhythm_regularity > 0.5  # Higher threshold for rhythm regularity
+        has_consistent_energy = rms_std < 0.1  # Music has more consistent energy
+        has_defined_frequency = rolloff_std > 200  # Music has more defined frequency content
         
         # Count how many music characteristics are present
         music_indicators = sum([
@@ -54,11 +64,13 @@ def is_music(audio, sr):
             has_varied_spectrum,
             has_complex_patterns,
             has_harmonic_structure,
-            has_regular_rhythm
+            has_regular_rhythm,
+            has_consistent_energy,
+            has_defined_frequency
         ])
         
-        # If 3 or more indicators suggest music, classify as music
-        return music_indicators >= 3
+        # Require 5 or more indicators to classify as music (more strict)
+        return music_indicators >= 5
         
     except Exception as e:
         # If analysis fails, assume it's not music (safer for snore detection)
