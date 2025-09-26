@@ -160,47 +160,6 @@ async def analyze_snore(file: UploadFile = File(...)):
         feat_real = extract_features(y, sr)
         feat_synth = extract_features(synthetic, sr)
         cos_sim = float(cosine_similarity(feat_real, feat_synth)[0][0])
-        
-        # Additional validation: Check if audio has snore-like characteristics
-        # Calculate spectral centroid (brightness) - snores typically have lower values
-        spectral_centroid = np.mean(librosa.feature.spectral_centroid(y=y, sr=sr))
-        
-        # Calculate zero crossing rate - snores have moderate values
-        zcr = np.mean(librosa.feature.zero_crossing_rate(y))
-        
-        # Calculate spectral rolloff - snores have lower rolloff frequencies
-        spectral_rolloff = np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr))
-        
-        # Adjust similarity based on snore characteristics
-        snore_likelihood = 1.0
-        
-        # Penalize if spectral centroid is too high (not snore-like)
-        if spectral_centroid > 2000:  # Hz
-            snore_likelihood *= 0.7
-            
-        # Penalize if zero crossing rate is too high (too much noise)
-        if zcr > 0.1:
-            snore_likelihood *= 0.8
-            
-        # Penalize if spectral rolloff is too high (too much high frequency content)
-        if spectral_rolloff > 4000:  # Hz
-            snore_likelihood *= 0.6
-            
-        # Apply snore likelihood adjustment to cosine similarity
-        adjusted_cos_sim = cos_sim * snore_likelihood
-        
-        # Determine if audio is likely a snore based on similarity and characteristics
-        is_likely_snore = (
-            adjusted_cos_sim > 0.3 and  # Minimum similarity threshold
-            spectral_centroid < 3000 and  # Not too bright
-            zcr < 0.15 and  # Not too noisy
-            spectral_rolloff < 5000  # Not too much high frequency content
-        )
-        
-        # Apply additional processing based on snore likelihood
-        if not is_likely_snore:
-            # For non-snore audio, apply more aggressive similarity reduction
-            adjusted_cos_sim *= 0.5  # Further reduce similarity for non-snore audio
 
         # DTW distance
         mfcc_real = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
@@ -209,8 +168,8 @@ async def analyze_snore(file: UploadFile = File(...)):
         dtw_distance = float(D[-1, -1])
 
         return {
-            "cosine_similarity": round(adjusted_cos_sim, 4),
-            "dtw_distance": round(dtw_distance, 4),
+            "cosine_similarity": cos_sim,
+            "dtw_distance": dtw_distance,
             "download_url": f"/download/{os.path.basename(synth_file)}",
             "audio_info": {
                 "original_duration": round(original_duration, 2),
