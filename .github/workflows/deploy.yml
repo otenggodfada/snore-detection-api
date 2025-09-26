@@ -27,11 +27,11 @@ jobs:
         gcloud auth activate-service-account --key-file=/tmp/service-account.json
         gcloud config set project ${{ secrets.GCP_PROJECT_ID }}
         
-    - name: Enable required APIs
+    - name: Enable required APIs (optional)
       run: |
-        gcloud services enable artifactregistry.googleapis.com
-        gcloud services enable run.googleapis.com
-        gcloud services enable cloudbuild.googleapis.com
+        gcloud services enable artifactregistry.googleapis.com || echo "Artifact Registry API already enabled or permission denied"
+        gcloud services enable run.googleapis.com || echo "Cloud Run API already enabled or permission denied"
+        gcloud services enable cloudbuild.googleapis.com || echo "Cloud Build API already enabled or permission denied"
         
     - name: Configure Docker for Artifact Registry
       run: |
