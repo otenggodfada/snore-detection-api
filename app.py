@@ -86,18 +86,20 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
                 # Calculate average confidence for this segment
                 segment_confidence = np.mean(confidence[segment_start:i])
                 
-                # Additional validation: check spectral characteristics
+                # Additional validation: check spectral characteristics (optimized)
                 segment_audio = audio[start_sample:end_sample]
-                spec = np.abs(librosa.stft(segment_audio))
-                freqs = librosa.fft_frequencies(sr=sr)
+                
+                # Quick spectral check using FFT (faster than STFT)
+                fft = np.abs(np.fft.rfft(segment_audio))
+                freqs = np.fft.rfftfreq(len(segment_audio), 1/sr)
                 
                 # Check energy distribution in snoring bands
-                low_snore_band = (freqs >= 50) & (freqs <= 150)  # Primary snoring band
-                mid_snore_band = (freqs >= 150) & (freqs <= 250)  # Secondary snoring band
+                low_snore_band = (freqs >= 50) & (freqs <= 150)
+                mid_snore_band = (freqs >= 150) & (freqs <= 250)
                 
-                low_energy = np.sum(spec[low_snore_band, :])
-                mid_energy = np.sum(spec[mid_snore_band, :])
-                total_energy = np.sum(spec) + 1e-8
+                low_energy = np.sum(fft[low_snore_band])
+                mid_energy = np.sum(fft[mid_snore_band])
+                total_energy = np.sum(fft) + 1e-8
                 
                 snore_energy_ratio = (low_energy + mid_energy) / total_energy
                 
@@ -115,17 +117,19 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
         if min_duration <= duration <= max_duration:
             segment_confidence = np.mean(confidence[segment_start:])
             
-            # Additional validation for final segment
+            # Additional validation for final segment (optimized)
             segment_audio = audio[start_sample:end_sample]
-            spec = np.abs(librosa.stft(segment_audio))
-            freqs = librosa.fft_frequencies(sr=sr)
+            
+            # Quick spectral check using FFT
+            fft = np.abs(np.fft.rfft(segment_audio))
+            freqs = np.fft.rfftfreq(len(segment_audio), 1/sr)
             
             low_snore_band = (freqs >= 50) & (freqs <= 150)
             mid_snore_band = (freqs >= 150) & (freqs <= 250)
             
-            low_energy = np.sum(spec[low_snore_band, :])
-            mid_energy = np.sum(spec[mid_snore_band, :])
-            total_energy = np.sum(spec) + 1e-8
+            low_energy = np.sum(fft[low_snore_band])
+            mid_energy = np.sum(fft[mid_snore_band])
+            total_energy = np.sum(fft) + 1e-8
             
             snore_energy_ratio = (low_energy + mid_energy) / total_energy
             
@@ -171,21 +175,20 @@ def extract_best_snore(audio, sr):
         duration = (end - start) / sr
         duration_score = 1.0 if 0.5 <= duration <= 2.0 else 0.7
         
-        # 3. Spectral characteristics (check for snoring frequencies)
-        spec = np.abs(librosa.stft(segment_audio))
-        freqs = librosa.fft_frequencies(sr=sr)
+        # 3. Spectral characteristics (check for snoring frequencies) - Optimized
+        fft = np.abs(np.fft.rfft(segment_audio))
+        freqs = np.fft.rfftfreq(len(segment_audio), 1/sr)
         
         # Energy in snoring band (50-200 Hz)
         snore_band_mask = (freqs >= 50) & (freqs <= 200)
-        snore_band_energy = np.sum(spec[snore_band_mask, :])
-        total_energy = np.sum(spec) + 1e-8
+        snore_band_energy = np.sum(fft[snore_band_mask])
+        total_energy = np.sum(fft) + 1e-8
         snore_ratio = snore_band_energy / total_energy
         
-        # 4. Periodicity (snores have some periodic structure)
-        autocorr = librosa.autocorrelate(segment_audio)
-        # Find peaks in autocorrelation (excluding zero lag)
-        peaks, _ = find_peaks(autocorr[sr//20:sr//2])  # Look for periods between 20-500ms
-        periodicity_score = min(len(peaks) / 5.0, 1.0)  # Normalize
+        # 4. Periodicity (snores have some periodic structure) - Simplified
+        # Use zero crossing rate as a proxy for periodicity (much faster)
+        zcr_segment = librosa.feature.zero_crossing_rate(segment_audio)[0]
+        periodicity_score = 1.0 - min(np.mean(zcr_segment) * 2, 1.0)  # Lower ZCR = more periodic
         
         # Combined quality score
         quality = (
@@ -367,11 +370,17 @@ async def analyze_snore(file: UploadFile = File(...)):
         y = best_snore
         duration = librosa.get_duration(y=y, sr=sr)
 
-        # Extract pitch & MFCCs from the best snore
-        f0, _, _ = librosa.pyin(
-            y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C5'), sr=sr
-        )
+        # Extract MFCCs from the best snore (faster - skip pitch for speed)
         mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=20)
+        
+        # Quick pitch estimation (faster than pyin)
+        # Use FFT to find dominant frequency
+        fft = np.abs(np.fft.rfft(y))
+        freqs = np.fft.rfftfreq(len(y), 1/sr)
+        # Focus on snoring range
+        snore_mask = (freqs >= 50) & (freqs <= 300)
+        dominant_freq = freqs[snore_mask][np.argmax(fft[snore_mask])] if np.any(snore_mask) else 100
+        f0 = np.full(mfccs.shape[1], dominant_freq)  # Simple pitch contour
 
         # Generate synthetic snore based on best detected snore
         synthetic = generate_snore(duration, sr, f0, mfccs)
@@ -399,14 +408,9 @@ async def analyze_snore(file: UploadFile = File(...)):
         # Energy features
         rms_energy = float(np.mean(librosa.feature.rms(y=y)))
         
-        # Pitch statistics
-        valid_f0 = f0[np.isfinite(f0)]
-        if len(valid_f0) > 0:
-            pitch_mean = float(np.mean(valid_f0))
-            pitch_std = float(np.std(valid_f0))
-        else:
-            pitch_mean = 0.0
-            pitch_std = 0.0
+        # Pitch statistics (using dominant frequency from earlier)
+        pitch_mean = float(dominant_freq)
+        pitch_std = 0.0  # Simplified for speed
 
         return {
             "detection_results": {
@@ -474,18 +478,17 @@ async def detect_all_snores(file: UploadFile = File(...)):
             # Calculate energy
             energy = float(np.mean(segment_audio ** 2))
             
-            # Calculate spectral features
-            spec = np.abs(librosa.stft(segment_audio))
-            freqs = librosa.fft_frequencies(sr=sr)
+            # Calculate spectral features (optimized with FFT)
+            fft = np.abs(np.fft.rfft(segment_audio))
+            freqs = np.fft.rfftfreq(len(segment_audio), 1/sr)
             snore_band_mask = (freqs >= 50) & (freqs <= 200)
-            snore_band_energy = np.sum(spec[snore_band_mask, :])
-            total_energy = np.sum(spec) + 1e-8
+            snore_band_energy = np.sum(fft[snore_band_mask])
+            total_energy = np.sum(fft) + 1e-8
             snore_ratio = float(snore_band_energy / total_energy)
             
-            # Calculate pitch
-            f0, _, _ = librosa.pyin(segment_audio, fmin=50, fmax=300, sr=sr)
-            valid_f0 = f0[np.isfinite(f0)]
-            pitch_mean = float(np.mean(valid_f0)) if len(valid_f0) > 0 else 0.0
+            # Calculate pitch (fast method using dominant frequency)
+            dominant_freq = freqs[snore_band_mask][np.argmax(fft[snore_band_mask])] if np.any(snore_band_mask) else 0.0
+            pitch_mean = float(dominant_freq)
             
             snore_details.append({
                 "segment_id": idx + 1,
