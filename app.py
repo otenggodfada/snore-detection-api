@@ -17,7 +17,7 @@ def extract_features(audio, sr):
     return np.mean(mfcc, axis=1).reshape(1, -1)
 
 # --- Advanced Snore Detection ---
-def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
+def detect_snore_segments(audio, sr, min_duration=0.5, max_duration=3.0):
     """
     Detect individual snore events in audio using advanced signal processing.
     
@@ -103,8 +103,19 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
                 
                 snore_energy_ratio = (low_energy + mid_energy) / total_energy
                 
-                # Only accept if significant energy in snoring bands
-                if snore_energy_ratio > 0.20:  # At least 20% energy in snoring bands (lowered for better detection)
+                # Pitch validation - snores should have fundamental frequency in typical range
+                pitches, magnitudes = librosa.piptrack(y=segment_audio, sr=sr, fmin=30, fmax=300)
+                pitch_values = []
+                for t in range(pitches.shape[1]):
+                    index = magnitudes[:, t].argmax()
+                    pitch = pitches[index, t]
+                    if pitch > 0:
+                        pitch_values.append(pitch)
+                
+                avg_pitch = np.mean(pitch_values) if pitch_values else 0
+                
+                # Only accept if significant energy in snoring bands AND pitch is in typical snore range
+                if snore_energy_ratio > 0.20 and (50 <= avg_pitch <= 180):  # Typical snore pitch range
                     segments.append((start_sample, end_sample, segment_confidence))
             
             in_segment = False
@@ -133,7 +144,19 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
             
             snore_energy_ratio = (low_energy + mid_energy) / total_energy
             
-            if snore_energy_ratio > 0.20:  # At least 20% energy in snoring bands (lowered for better detection)
+            # Pitch validation - snores should have fundamental frequency in typical range
+            pitches, magnitudes = librosa.piptrack(y=segment_audio, sr=sr, fmin=30, fmax=300)
+            pitch_values = []
+            for t in range(pitches.shape[1]):
+                index = magnitudes[:, t].argmax()
+                pitch = pitches[index, t]
+                if pitch > 0:
+                    pitch_values.append(pitch)
+            
+            avg_pitch = np.mean(pitch_values) if pitch_values else 0
+            
+            # Only accept if significant energy in snoring bands AND pitch is in typical snore range
+            if snore_energy_ratio > 0.20 and (50 <= avg_pitch <= 180):  # Typical snore pitch range
                 segments.append((start_sample, end_sample, segment_confidence))
     
     return segments
