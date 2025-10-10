@@ -60,7 +60,7 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
     
     # Balanced threshold detection - use both adaptive and absolute minimum
     adaptive_threshold = np.percentile(confidence, 65)  # Balanced threshold
-    absolute_minimum = 0.55  # Absolute minimum confidence to be considered snoring
+    absolute_minimum = 0.50  # Absolute minimum confidence to be considered snoring (lowered for better detection)
     threshold = max(adaptive_threshold, absolute_minimum)
     
     # Find regions above threshold
@@ -104,7 +104,7 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
                 snore_energy_ratio = (low_energy + mid_energy) / total_energy
                 
                 # Only accept if significant energy in snoring bands
-                if snore_energy_ratio > 0.25:  # At least 25% energy in snoring bands
+                if snore_energy_ratio > 0.20:  # At least 20% energy in snoring bands (lowered for better detection)
                     segments.append((start_sample, end_sample, segment_confidence))
             
             in_segment = False
@@ -133,7 +133,7 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
             
             snore_energy_ratio = (low_energy + mid_energy) / total_energy
             
-            if snore_energy_ratio > 0.25:
+            if snore_energy_ratio > 0.20:  # At least 20% energy in snoring bands (lowered for better detection)
                 segments.append((start_sample, end_sample, segment_confidence))
     
     return segments
