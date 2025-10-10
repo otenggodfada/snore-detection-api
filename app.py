@@ -58,8 +58,10 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
     # Smooth confidence curve
     confidence = np.convolve(confidence, np.ones(5)/5, mode='same')
     
-    # Threshold detection
-    threshold = np.percentile(confidence, 60)  # Adaptive threshold
+    # Balanced threshold detection - use both adaptive and absolute minimum
+    adaptive_threshold = np.percentile(confidence, 65)  # Balanced threshold
+    absolute_minimum = 0.55  # Absolute minimum confidence to be considered snoring
+    threshold = max(adaptive_threshold, absolute_minimum)
     
     # Find regions above threshold
     above_threshold = confidence > threshold
@@ -83,7 +85,25 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
             if min_duration <= duration <= max_duration:
                 # Calculate average confidence for this segment
                 segment_confidence = np.mean(confidence[segment_start:i])
-                segments.append((start_sample, end_sample, segment_confidence))
+                
+                # Additional validation: check spectral characteristics
+                segment_audio = audio[start_sample:end_sample]
+                spec = np.abs(librosa.stft(segment_audio))
+                freqs = librosa.fft_frequencies(sr=sr)
+                
+                # Check energy distribution in snoring bands
+                low_snore_band = (freqs >= 50) & (freqs <= 150)  # Primary snoring band
+                mid_snore_band = (freqs >= 150) & (freqs <= 250)  # Secondary snoring band
+                
+                low_energy = np.sum(spec[low_snore_band, :])
+                mid_energy = np.sum(spec[mid_snore_band, :])
+                total_energy = np.sum(spec) + 1e-8
+                
+                snore_energy_ratio = (low_energy + mid_energy) / total_energy
+                
+                # Only accept if significant energy in snoring bands
+                if snore_energy_ratio > 0.25:  # At least 25% energy in snoring bands
+                    segments.append((start_sample, end_sample, segment_confidence))
             
             in_segment = False
     
@@ -94,7 +114,23 @@ def detect_snore_segments(audio, sr, min_duration=0.3, max_duration=3.0):
         duration = (end_sample - start_sample) / sr
         if min_duration <= duration <= max_duration:
             segment_confidence = np.mean(confidence[segment_start:])
-            segments.append((start_sample, end_sample, segment_confidence))
+            
+            # Additional validation for final segment
+            segment_audio = audio[start_sample:end_sample]
+            spec = np.abs(librosa.stft(segment_audio))
+            freqs = librosa.fft_frequencies(sr=sr)
+            
+            low_snore_band = (freqs >= 50) & (freqs <= 150)
+            mid_snore_band = (freqs >= 150) & (freqs <= 250)
+            
+            low_energy = np.sum(spec[low_snore_band, :])
+            mid_energy = np.sum(spec[mid_snore_band, :])
+            total_energy = np.sum(spec) + 1e-8
+            
+            snore_energy_ratio = (low_energy + mid_energy) / total_energy
+            
+            if snore_energy_ratio > 0.25:
+                segments.append((start_sample, end_sample, segment_confidence))
     
     return segments
 
@@ -166,6 +202,16 @@ def extract_best_snore(audio, sr):
     
     if best_segment:
         start, end, confidence, quality = best_segment
+        
+        # Reject if quality is too low (likely not a snore)
+        if quality < 0.4:  # Minimum quality threshold
+            return audio, 0, len(audio)/sr, {
+                "snores_detected": len(segments),
+                "confidence": 0.0,
+                "quality_score": 0.0,
+                "note": "Detected segments did not meet minimum quality threshold"
+            }
+        
         best_snore = audio[start:end]
         
         # Add small fade in/out to avoid clicks
